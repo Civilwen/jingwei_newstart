@@ -1,0 +1,1 @@
+python ./main.py --class_num 4 --train_batch_size 12 --test_batch_size 12 --epochs 50 --lr 0.001 --momentum 0.9 --results_path ./results  --image_path /media/wmmubuntu/ResearchData/Project/jingwei_0708/train/data1024 --label_path /media/wmmubuntu/ResearchData/Project/jingwei_0708/train/label1024 --data_csv_path /media/wmmubuntu/ResearchData/Project/jingwei_0708/train/data_csv.csv
