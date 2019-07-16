@@ -3,9 +3,13 @@ import torch
 import torch.optim as optim
 import os
 import pandas as pd
+import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
 from dataset import AgricultureDataset
 from dice_loss import MulDiceLoss
 from unet import Unet_ResNet34 as Unet
+from PIL import Image
 import time
 
 
@@ -13,9 +17,11 @@ def save_checkpoint(state, path):
     torch.save(state, path)
 
 
-def train(model, device, train_loader, optimizer, epoch):
+def train(model, device, train_loader, optimizer, epoch, History: dict):
+
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
+        #print(data.shape)
 
         '''
          shape of test-data:torch.Size([1, 3, 512, 512]),test-target:torch.Size([1, 512, 512])
@@ -30,18 +36,36 @@ def train(model, device, train_loader, optimizer, epoch):
         NLLLoss的结果就是把上面的输出output与Label对应的那个值(索引)拿出来，再去掉负号，再求均值。
         log_softmax+NLLLoss的操作可由CrossEntropyLoss直接合并        
         '''
-
-        loss = MulDiceLoss(output, target)
+        output = F.softmax(output, dim=1)
+        loss = MulDiceLoss(output, target,weights=torch.Tensor([0.07,0.34,0.37,0.22]))
         loss.backward()
         optimizer.step()
 
-        if batch_idx % 50 == 0:  # 每50个batchs打印一下训练状态
+        if batch_idx % 20 == 0:  # 每50个batchs打印一下训练状态
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                        100. * batch_idx / len(train_loader), loss.item()))
 
 
-def evaluate(model, device, data_loader, data_categ: str, History: dict, class_num=4):
+    if epoch%1==0:
+        img_origin = (data.detach()[0,:,:,:].cpu().numpy()*255).astype(np.uint8)
+        img_origin = np.transpose(img_origin, (1,2,0))
+        #print(img_origin.dtype)
+        #print(img_origin.shape)
+        img_origin = Image.fromarray(img_origin)
+        img_pre = output.detach()[0,:,:,:].cpu()
+        img_pre = torch.argmax(img_pre,0).byte().numpy()*80
+        #print(img_pre.dtype)
+        img_pre = Image.fromarray(img_pre)
+        img_real = target.detach()[0,:,:,:].cpu()
+        img_real = torch.argmax(img_real,0).byte().numpy()*80
+        img_real = Image.fromarray(img_real)
+        img_origin.save('./results/tmp/img{}.png'.format(epoch))
+        img_pre.save('./results/tmp/predict{}.png'.format(epoch))
+        img_real.save('./results/tmp/real{}.png'.format(epoch))
+
+
+def evaluate(model, device, data_loader, data_catag, History: dict, class_num=4):
     model.eval()
     eval_loss = 0
     eval_acc = 0
@@ -51,18 +75,20 @@ def evaluate(model, device, data_loader, data_categ: str, History: dict, class_n
             data, target = data.to(device), target.to(device)
 
             output = model(data)
-            loss = MulDiceLoss().to('cuda')(output, target)
+            output = F.softmax(output, dim=1)
+            loss = MulDiceLoss(output, target, weights=torch.Tensor([0.07,0.34,0.37,0.22])).to('cuda')
             eval_loss += loss
 
             # predict = torch.argmax(output, 1).byte()  # argmax中dim表示要消失的那个维度，即返回该维度上值最大的索引值  完美解决像素表示问题
             # target = target.byte()
 
-    eval_acc = eval_acc / max_batch
     eval_loss = eval_loss / max_batch
+    eval_acc = 1 - eval_loss
 
-    History[data_categ + "_loss"].append(eval_loss)
-    History[data_categ + "_acc"].append(eval_acc)
-    print("{} Loss is {:.6f}, mean precision is: {:.4f}%".format(data_categ, eval_loss, eval_acc))
+
+    History[data_catag + "_loss"].append(eval_loss)
+    History[data_catag + "_acc"].append(eval_acc)
+    print("{} Loss is {:.6f}, mean precision is: {:.4f}".format(data_catag, eval_loss, eval_acc))
 
 
 def main():
@@ -86,7 +112,7 @@ def main():
                         help='input your path to load the image')
     parser.add_argument('--label_path', type=str,
                         help='input your path to load the label')
-    parser.add_argument('--data_cvs_path', type=str,
+    parser.add_argument('--data_csv_path', type=str,
                         help='input your path to load the date_cvs file')
     parser.add_argument('--no_cuda', action='store_true', default=False,
                         help='disables CUDA training')
@@ -95,12 +121,17 @@ def main():
 
     args = parser.parse_args()
 
-    if os.path.exists(args.results_path):
+    if not os.path.exists(args.results_path):
         os.mkdir(args.results_path)
-    if os.path.exists(args.results_path + os.sep + "checkpoint_path"):
+    if not os.path.exists(args.results_path + os.sep + "checkpoint_path"):
         os.mkdir(args.results_path + os.sep + "checkpoint_path")
-    if os.path.exists(args.results_path + os.sep + "model"):
+    if not os.path.exists(args.results_path + os.sep + "model"):
         os.mkdir(args.results_path + os.sep + "model")
+    if not os.path.exists(args.results_path + os.sep + 'loss_curve'):
+        os.mkdir(args.results_path + os.sep + 'loss_curve')
+    if not os.path.exists(args.results_path + os.sep + 'tmp'):
+        os.mkdir(args.results_path + os.sep + 'tmp')
+
 
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     torch.manual_seed(args.seed)
@@ -111,13 +142,13 @@ def main():
     best_precision = 0
 
     History = {"train_loss": [],
-               # "train_acc": [],
+               "train_acc": [],
                "val_loss": [],
-               # "val_acc": []
+               "val_acc": []
                }
 
     model = Unet(args.class_num).to(device)
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     resume = False
     # 4.4 restart the training process
@@ -140,20 +171,23 @@ def main():
                                                                   label_path=args.label_path,
                                                                   datalist=data_list,
                                                                   mode="train",
-                                                                  train_ratio=0.7),
-                                               batch_size=args.batch_size,
+                                                                  train_ratio=0.8),
+                                               batch_size=args.train_batch_size,
                                                shuffle=True,
                                                drop_last=True, **kwargs)
     valid_loader = torch.utils.data.DataLoader(AgricultureDataset(image_path=args.image_path,
                                                                   label_path=args.label_path,
                                                                   datalist=data_list,
-                                                                  mode="valid"),
-                                               batch_size=args.batch_size,
+                                                                  mode="valid",
+                                                                  is_aug=False),
+                                               batch_size=args.test_batch_size,
                                                shuffle=True,
                                                drop_last=True, **kwargs)
 
+
     for epoch in range(start_epoch, args.epochs + 1):
-        train(model, device, train_loader, optimizer, epoch)
+
+        train(model, device, train_loader, optimizer, epoch, History)
 
         save_checkpoint({
             "epoch": epoch + 1,
@@ -163,18 +197,30 @@ def main():
             "History": History
         }, args.results_path + os.sep + "checkpoint_path" + os.sep + "/_checkpoint.pth.tar")
 
-        if epoch % 3 == 0:
+        if (epoch + 0) % 1 == 0:
             print("epoch:{}--------------------\n".format(epoch))
-            evaluate(model=model, device=device, data_loader=train_loader,
-                     data_categ="train", History=History, class_num=args.class_num)
-            evaluate(model=model, device=device, data_loader=valid_loader,
-                     data_categ="val", History=History, class_num=args.class_num)
+
+            evaluate(model, device, train_loader, "train", History, args.class_num)
+            evaluate(model, device, valid_loader, "val", History, args.class_num)
+
             torch.save(model,
                        args.results_path + os.sep + "model" + os.sep + "model_epoch{}.pth".format(epoch))
             if History["val_loss"][-1] < best_precision:
                 best_precision = History["val_loss"][-1]
                 torch.save(model, args.results_path + os.sep + "model" + os.sep + "model_best.pth")
-
+            plt.style.use("ggplot")
+            plt.figure()
+            N = epoch + 1
+            plt.plot(np.arange(0, N), History["train_loss"], label="train_loss")
+            plt.plot(np.arange(0, N), History["val_loss"], label="val_loss")
+            plt.plot(np.arange(0, N), History["train_acc"], label="train_acc")
+            plt.plot(np.arange(0, N), History["val_acc"], label="val_acc")
+            plt.title("Training Loss and Accuracy on SegNet Satellite Seg")
+            plt.xlabel("Epoch #")
+            plt.ylabel("Loss/Accuracy")
+            plt.legend(loc="lower left")
+            plt.savefig(args.results_path + os.sep + 'loss_curve' + os.sep + 'curve_{}.jpg'.format(epoch))
+            plt.close()
 
 if __name__ == '__main__':
     main()

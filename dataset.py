@@ -5,82 +5,75 @@ import math
 import cv2
 from torch.utils.data import Dataset
 from torchvision import transforms as T
-from PIL import Image
+from PIL import Image,ImageEnhance
 
 
-img_w = 512
-img_h = 512
+img_w = 1024
+img_h = 1024
 
 
-def gamma_transform(img, gamma):  # gamma变换
-    gamma_table = [np.power(x / 255.0, gamma) * 255.0 for x in range(256)]
-    gamma_table = np.round(np.array(gamma_table)).astype(np.uint8)
-    return cv2.LUT(img, gamma_table)
+def enhance(xb):
+    #random do the input image augmentation
+    if np.random.random()>0.5:
+        #sharpness
+        factor = 0.5 + np.random.random()
+        xb = ImageEnhance.Sharpness(xb).enhance(factor)
+    if np.random.random()>0.5:
+        #color augument
+        factor = 0.5 + np.random.random()
+        xb = ImageEnhance.Color(xb).enhance(factor)
+    if np.random.random()>0.5:
+        #contrast augument
+        factor = 0.5 + np.random.random()
+        xb = ImageEnhance.Contrast(xb).enhance(factor)
+    if np.random.random()>0.5:
+        #brightness
+        factor = 0.5 + np.random.random()
+        xb = ImageEnhance.Brightness(xb).enhance(factor)
+    return xb
 
-
-def random_gamma_transform(img, gamma_vari):
-    log_gamma_vari = np.log(gamma_vari)
-    alpha = np.random.uniform(-log_gamma_vari, log_gamma_vari)  # 一个左闭右开的均匀分布
-    gamma = np.exp(alpha)
-    return gamma_transform(img, gamma)
-
-
-def rotate(xb, yb, angle):
-    M_rotate = cv2.getRotationMatrix2D((img_w / 2, img_h / 2), angle, 1)
-    xb = cv2.warpAffine(xb, M_rotate, (img_w, img_h))
-    yb = cv2.warpAffine(yb, M_rotate, (img_w, img_h))
+def rotate(xb, yb):
+    transtypes=[Image.FLIP_LEFT_RIGHT,Image.FLIP_TOP_BOTTOM,
+                Image.ROTATE_90,Image.ROTATE_180,Image.ROTATE_270]
+    transtype=transtypes[np.random.randint(len(transtypes))]
+    xb = xb.transpose(transtype)  # flipcode > 0：沿y轴翻转
+    yb = yb.transpose(transtype)
     return xb, yb
 
 
-def blur(img):
-    img = cv2.blur(img, (3, 3));
-    return img
+#def blur(img):
+#    img = cv2.blur(img, (3, 3));
+#    return img
 
 
-def add_noise(img):
-    for i in range(200):  # 添加点噪声
-        temp_x = np.random.randint(0, img.shape[0])
-        temp_y = np.random.randint(0, img.shape[1])
-        img[temp_x][temp_y] = 255
-    return img
+#def add_noise(img):
+#    for i in range(200):  # 添加点噪声
+#        temp_x = np.random.randint(0, img.shape[0])
+#        temp_y = np.random.randint(0, img.shape[1])
+#        img[temp_x][temp_y] = 255
+#    return img
 
 
 def data_augment(xb, yb):
-    if np.random.random() < 0.25:
-        xb, yb = rotate(xb, yb, 90)
-    if np.random.random() < 0.25:
-        xb, yb = rotate(xb, yb, 180)
-    # if np.random.random() < 0.25:
-    #     xb, yb = rotate(xb, yb, 270)
-    if np.random.random() < 0.25:
-        xb = cv2.flip(xb, 1)  # flipcode > 0：沿y轴翻转
-        yb = cv2.flip(yb, 1)
+    if np.random.random() < 0.4:
+        xb, yb = rotate(xb, yb)
 
-    if np.random.random() < 0.25:
-        xb = random_gamma_transform(xb, 1.0)
-
-    if np.random.random() < 0.25:
-        xb = blur(xb)
-
-    if np.random.random() < 0.2:
-        xb = add_noise(xb)
+    if np.random.random() < 0.4:
+        xb = enhance(xb)
 
     return xb, yb
 
 
 class AgricultureDataset(Dataset):
-    def __init__(self, image_path: str, label_path: str, datalist, mode="train", train_ratio=0.7,
+    def __init__(self, image_path: str, label_path: str, datalist, mode="train", train_ratio=0.9,
                  is_aug=True):
         self.image_path = image_path + "/"
         self.label_path = label_path + "/"
         self.data_list = datalist
         self.mode = mode
         self.is_aug = is_aug
-
-        data_list = pd.read_csv(self.data_csv_path)
-        data_list = data_list.sample(frac=1)
-
         self.data_sclae = train_ratio
+
         imgs = []
         labels = []
         row_numbers = self.data_list.shape[0]
@@ -89,8 +82,10 @@ class AgricultureDataset(Dataset):
             labels.append(row[1])
 
         if mode == "train":
-            self.imgs = imgs[0:math.ceil(row_numbers * self.data_sclae)]
-            self.labels = labels[0:math.ceil(row_numbers * self.data_sclae)]
+            self.imgs = imgs
+            self.labels = labels
+            #self.imgs = imgs[0:math.ceil(row_numbers * self.data_sclae)]
+            #self.labels = labels[0:math.ceil(row_numbers * self.data_sclae)]
         elif mode == "valid":
             self.imgs = imgs[math.ceil(row_numbers * self.data_sclae):]
             self.labels = labels[math.ceil(row_numbers * self.data_sclae):]
@@ -118,6 +113,7 @@ class AgricultureDataset(Dataset):
         # ToTensor
         img = self.transforms(img)
         label = np.array(label)
-        label = torch.from_numpy(label).long()
+        label = np.transpose(label,(2,0,1))
+        label = torch.from_numpy(label).float()
 
         return img, label

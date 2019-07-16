@@ -49,7 +49,7 @@ class Unet(nn.Module):
         self.dconv_4 = Decode_block(512, 256, 2, 2)
         self.dconv_3 = Decode_block(256, 128, 2, 2)
         self.dconv_2 = Decode_block(128, 64, 2, 2)
-        self.dconv_1 = Decode_block(128, 64, 8, 4)
+        self.dconv_1 = Decode_block(128, 64, 4, 4)
 
         self.final_out = nn.Sequential(
             nn.Conv2d(32, 32, 3, padding=1),
